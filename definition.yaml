@@ -1,0 +1,57 @@
+apiVersion: apiextensions.crossplane.io/v1
+kind: CompositeResourceDefinition
+metadata:
+  name: xdatabases.example.com
+spec:
+  group: example.com
+  names:
+    kind: XDatabase
+    plural: xdatabases
+  # Cluster-scoped composite resource
+  claimNames:
+    kind: Database
+    plural: databases
+  # Namespace-scoped claim
+  versions:
+    - name: v1alpha1
+      served: true
+      referenceable: true
+      schema:
+        openAPIV3Schema:
+          type: object
+          properties:
+            spec:
+              type: object
+              properties:
+                parameters:
+                  type: object
+                  properties:
+                    size:
+                      type: string
+                      enum: [small, medium, large]
+                      description: "Database size"
+                    storageGB:
+                      type: integer
+                      minimum: 20
+                      maximum: 1000
+                    version:
+                      type: string
+                      default: "14"
+                    environment:
+                      type: string
+                      enum: [dev, staging, prod]
+                  required:
+                    - size
+                    - environment
+              required:
+                - parameters
+            status:
+              type: object
+              properties:
+                endpoint:
+                  type: string
+                  description: "Database connection endpoint"
+                ready:
+                  type: boolean
+                username:
+                  type: string
