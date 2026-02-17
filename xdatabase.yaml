@@ -1,0 +1,13 @@
+apiVersion: example.com/v1alpha1
+kind: XDatabase
+metadata:
+  name: my-app-db-xyz123
+spec:
+  parameters:
+    size: large
+    storageGB: 500
+    version: "15"
+    environment: prod
+  compositionRef:
+    name: database-aws
+    # Cluster-scoped Composite Resource
