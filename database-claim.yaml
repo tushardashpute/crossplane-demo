@@ -1,0 +1,21 @@
+apiVersion: example.com/v1alpha1
+kind: Database
+metadata:
+  name: my-app-db
+  namespace: production
+spec:
+  parameters:
+    size: medium
+    storageGB: 100
+    version: "14"
+    environment: prod
+  # Optional: Select specific composition
+  compositionSelector:
+    matchLabels:
+      provider: aws
+  # How to handle deletion
+  compositionUpdatePolicy: Automatic
+  # Where to write connection details
+  writeConnectionSecretToRef:
+    name: my-app-db-connection
+  # Namespaced scoped
