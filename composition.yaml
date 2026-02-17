@@ -1,0 +1,147 @@
+apiVersion: apiextensions.crossplane.io/v1
+kind: Composition
+metadata:
+  name: database-aws
+  labels:
+    provider: aws
+spec:
+  compositeTypeRef:
+    apiVersion: example.com/v1alpha1
+    kind: XDatabase
+  
+  mode: Pipeline
+  
+  pipeline:
+    # Step 1: Process inputs and prepare context
+    - step: prepare-context
+      functionRef:
+        name: function-go-templating
+      input:
+        apiVersion: gotemplating.fn.crossplane.io/v1beta1
+        kind: GoTemplate
+        source: Inline
+        inline:
+          template: |
+            {{ $xr := .observed.composite.resource }}
+            {{ $size := $xr.spec.parameters.size }}
+            {{ $env := $xr.spec.parameters.environment }}
+            
+            # Determine instance size based on input
+            {{- $instanceSize := "" }}
+            {{- if eq $size "small" }}
+              {{- $instanceSize = "db.t3.micro" }}
+            {{- else if eq $size "medium" }}
+              {{- $instanceSize = "db.t3.medium" }}
+            {{- else }}
+              {{- $instanceSize = "db.m5.large" }}
+            {{- end }}
+            
+            # Generate unique name
+            {{ $dbName := printf "db-%s-%s" $env $xr.metadata.name }}
+            
+            ---
+            apiVersion: meta.gotemplating.fn.crossplane.io/v1alpha1
+            kind: Context
+            data:
+              instanceSize: {{ $instanceSize }}
+              dbName: {{ $dbName }}
+              storageGB: {{ $xr.spec.parameters.storageGB | default 100 }}
+              version: {{ $xr.spec.parameters.version }}
+    
+    # Step 2: Render AWS resources
+    - step: render-resources
+      functionRef:
+        name: function-go-templating
+      input:
+        apiVersion: gotemplating.fn.crossplane.io/v1beta1
+        kind: GoTemplate
+        source: Inline
+        inline:
+          template: |
+            {{ $xr := .observed.composite.resource }}
+            
+            ---
+            # Managed Resource 1: RDS Instance
+            apiVersion: rds.aws.upbound.io/v1beta1
+            kind: Instance
+            metadata:
+              name: {{ .context.dbName }}
+              annotations:
+                {{ setResourceNameAnnotation "rds-instance" }}
+            spec:
+              forProvider:
+                region: us-east-1
+                instanceClass: {{ .context.instanceSize }}
+                engine: postgres
+                engineVersion: {{ .context.version | quote }}
+                allocatedStorage: {{ .context.storageGB }}
+                dbName: {{ .context.dbName }}
+                username: admin
+                passwordSecretRef:
+                  name: {{ printf "%s-password" .context.dbName }}
+                  namespace: crossplane-system
+                  key: password
+                skipFinalSnapshot: true
+                publiclyAccessible: false
+              providerConfigRef:
+                name: default
+            
+            ---
+            # Managed Resource 2: Security Group
+            apiVersion: ec2.aws.upbound.io/v1beta1
+            kind: SecurityGroup
+            metadata:
+              name: {{ printf "%s-sg" .context.dbName }}
+              annotations:
+                {{ setResourceNameAnnotation "security-group" }}
+            spec:
+              forProvider:
+                region: us-east-1
+                description: Security group for database
+                vpcId: vpc-12345678
+                ingress:
+                  - fromPort: 5432
+                    toPort: 5432
+                    protocol: tcp
+                    cidrBlocks:
+                      - 10.0.0.0/16
+              providerConfigRef:
+                name: default
+            
+            ---
+            # Managed Resource 3: Kubernetes Secret with credentials
+            apiVersion: kubernetes.crossplane.io/v1alpha2
+            kind: Object
+            metadata:
+              name: {{ printf "%s-secret" .context.dbName }}
+              annotations:
+                {{ setResourceNameAnnotation "k8s-secret" }}
+            spec:
+              forProvider:
+                manifest:
+                  apiVersion: v1
+                  kind: Secret
+                  metadata:
+                    name: {{ printf "%s-connection" .context.dbName }}
+                    namespace: {{ $xr.spec.claimRef.namespace | default "default" }}
+                  type: Opaque
+                  stringData:
+                    endpoint: {{ printf "%s.rds.amazonaws.com:5432" .context.dbName }}
+                    username: admin
+                    database: {{ .context.dbName }}
+              providerConfigRef:
+                name: default
+            
+            ---
+            # Update XR status with connection info
+            apiVersion: example.com/v1alpha1
+            kind: XDatabase
+            status:
+              endpoint: {{ printf "%s.rds.amazonaws.com:5432" .context.dbName }}
+              ready: {{ eq (index .observed.resources "rds-instance" "resource" "status" "conditions" 0 "status") "True" }}
+              username: "admin"
+    
+    # Step 3: Mark resources as ready automatically
+    - step: auto-ready
+      functionRef:
+        name: function-auto-ready
